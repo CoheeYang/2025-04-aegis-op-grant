@@ -73,41 +73,60 @@ contract AegisRewards is IAegisRewardsEvents, IAegisRewardsErrors, AccessControl
     _domainSeparator = _computeDomainSeparator();
   }
 
-  /// @dev Return cached value if chainId matches cache, otherwise recomputes separator
-  /// @return The domain separator at current chain
-  function getDomainSeparator() public view returns (bytes32) {
-    if (block.chainid == _chainId) {
-      return _domainSeparator;
+
+
+
+//// work flow 
+  ///1. get reward from minter
+    /// @dev Adds minted YUSD rewards from AegisMintingContract
+  function depositRewards(bytes calldata requestId, uint256 amount) external {
+    require(_msgSender() == aegisMinting);
+
+    bytes32 id = _stringToBytes32(abi.decode(requestId, (string)));//这个id来自order.addtionalData
+    _rewards[id].amount += amount;
+
+    emit DepositRewards(id, amount, block.timestamp);
+  }
+
+  ///2. mark reward as claimable
+  /// @dev Marks reward with id as final
+  /// TODO add onlyOwner modifier
+  function finalizeRewards(bytes32 id, uint256 claimDuration) external onlyRole(REWARDS_MANAGER_ROLE) {
+    if (_rewards[id].finalized) {
+      revert UnknownRewards();
     }
-    return _computeDomainSeparator();
+
+    _rewards[id].finalized = true;
+    if (claimDuration > 0) {
+      _rewards[id].expiry = block.timestamp + claimDuration;
+    }
+
+    emit FinalizeRewards(id, _rewards[id].expiry);
   }
 
-  /// @dev Returns reward amount for provided id
-  function rewardById(string calldata id) public view returns (Reward memory) {
-    return _rewards[_stringToBytes32(id)];
-  }
 
+  /////3. claim reward
   /// @dev Transfers rewards at ids to a caller
   function claimRewards(ClaimRewardsLib.ClaimRequest calldata claimRequest, bytes calldata signature) external nonReentrant {
-    claimRequest.verify(getDomainSeparator(), aegisConfig.trustedSigner(), signature);
+    claimRequest.verify(getDomainSeparator(), aegisConfig.trustedSigner(), signature);//can i front run?
 
     uint256 count = 0;
     uint256 totalAmount = 0;
     bytes32[] memory claimedIds = new bytes32[](claimRequest.ids.length);
     uint256 len = claimRequest.ids.length;
     for (uint256 i = 0; i < len; i++) {
-      if (
+      if (//finalized = false || amount = 0 || expired || claimed
         !_rewards[claimRequest.ids[i]].finalized ||
         _rewards[claimRequest.ids[i]].amount == 0 ||
-        (_rewards[claimRequest.ids[i]].expiry > 0 && _rewards[claimRequest.ids[i]].expiry < block.timestamp) ||
+        (_rewards[claimRequest.ids[i]].expiry > 0 && _rewards[claimRequest.ids[i]].expiry < block.timestamp) ||// has expiry and expired
         _addressClaimedRewards[_msgSender()][claimRequest.ids[i]]
       ) {
         continue;
       }
 
-      _addressClaimedRewards[_msgSender()][claimRequest.ids[i]] = true;
-      _rewards[claimRequest.ids[i]].amount -= claimRequest.amounts[i];
-      totalAmount += claimRequest.amounts[i];
+      _addressClaimedRewards[_msgSender()][claimRequest.ids[i]] = true; //mark claimed
+      _rewards[claimRequest.ids[i]].amount -= claimRequest.amounts[i]; //reduce claimable amount 
+      totalAmount += claimRequest.amounts[i]; 
       claimedIds[count] = claimRequest.ids[i];
       count++;
     }
@@ -126,20 +145,7 @@ contract AegisRewards is IAegisRewardsEvents, IAegisRewardsErrors, AccessControl
     emit ClaimRewards(_msgSender(), claimedIds, totalAmount);
   }
 
-  /// @dev Marks reward with id as final
-  /// TODO add onlyOwner modifier
-  function finalizeRewards(bytes32 id, uint256 claimDuration) external onlyRole(REWARDS_MANAGER_ROLE) {
-    if (_rewards[id].finalized) {
-      revert UnknownRewards();
-    }
 
-    _rewards[id].finalized = true;
-    if (claimDuration > 0) {
-      _rewards[id].expiry = block.timestamp + claimDuration;
-    }
-
-    emit FinalizeRewards(id, _rewards[id].expiry);
-  }
 
   /// @dev Transfers expired rewards left amount to destination address
   function withdrawExpiredRewards(bytes32 id, address to) external onlyRole(REWARDS_MANAGER_ROLE) {
@@ -154,16 +160,8 @@ contract AegisRewards is IAegisRewardsEvents, IAegisRewardsErrors, AccessControl
     emit WithdrawExpiredRewards(id, to, amount);
   }
 
-  /// @dev Adds minted YUSD rewards from AegisMintingContract
-  function depositRewards(bytes calldata requestId, uint256 amount) external {
-    require(_msgSender() == aegisMinting);
 
-    bytes32 id = _stringToBytes32(abi.decode(requestId, (string)));
-    _rewards[id].amount += amount;
-
-    emit DepositRewards(id, amount, block.timestamp);
-  }
-
+/////// set and views 
   /// @dev Sets new AegisConfig address
   function setAegisConfigAddress(IAegisConfig _aegisConfig) external onlyRole(DEFAULT_ADMIN_ROLE) {
     _setAegisConfigAddress(_aegisConfig);
@@ -194,6 +192,21 @@ contract AegisRewards is IAegisRewardsEvents, IAegisRewardsErrors, AccessControl
     assembly {
       result := mload(add(source, 32))
     }
+  }
+
+
+    /// @dev Return cached value if chainId matches cache, otherwise recomputes separator
+  /// @return The domain separator at current chain
+  function getDomainSeparator() public view returns (bytes32) {
+    if (block.chainid == _chainId) {
+      return _domainSeparator;
+    }
+    return _computeDomainSeparator();
+  }
+
+  /// @dev Returns reward amount for provided id
+  function rewardById(string calldata id) public view returns (Reward memory) {
+    return _rewards[_stringToBytes32(id)];
   }
 
   function _computeDomainSeparator() internal view returns (bytes32) {

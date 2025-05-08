@@ -21,7 +21,7 @@ library ClaimRewardsLib {
   /// @dev Hashes claim request struct
   function hashClaimRequest(ClaimRequest calldata req, bytes32 domainSeparator) internal pure returns (bytes32) {
     return MessageHashUtils.toTypedDataHash(domainSeparator, keccak256(encodeClaimRequest(req)));
-  }
+  }//等同：keccak256(abi.encodePacked(19_01,domainSeparator,structHash))
 
   function encodeClaimRequest(ClaimRequest calldata req) internal pure returns (bytes memory) {
     return abi.encode(CLAIM_REQUEST_TYPE, req.claimer, keccak256(abi.encodePacked(req.ids)), keccak256(abi.encodePacked(req.amounts)));

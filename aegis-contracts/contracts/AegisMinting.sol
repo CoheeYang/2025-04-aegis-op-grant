@@ -203,7 +203,7 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     _chainId = block.chainid;
     _domainSeparator = _computeDomainSeparator();
   }
-
+///////views calculations
   /// @dev Returns custody transferrable asset funds minus durty funds
   function custodyAvailableAssetBalance(address asset) public view returns (uint256) {
     return _custodyAvailableAssetBalance(asset);
@@ -230,9 +230,9 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     (uint256 price, ) = _getAssetYUSDPriceOracle(asset);
     return price;
   }
-
+/////////main functions
   /**
-   * @dev Mints YUSD from assets
+   * @dev Mints YUSD from assets 抵押资产以获得YUSD
    * @param order Struct containing order details
    * @param signature Signature of trusted signer
    */
@@ -247,11 +247,11 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
       revert InvalidOrder();
     }
 
-    _checkMintRedeemLimit(mintLimit, order.yusdAmount);
+    _checkMintRedeemLimit(mintLimit, order.yusdAmount);//检查这段时间内mint是否超过额度
     order.verify(getDomainSeparator(), aegisConfig.trustedSigner(), signature);
     _deduplicateOrder(order.userWallet, order.nonce);
 
-    uint256 yusdAmount = _calculateMinYUSDAmount(order.collateralAsset, order.collateralAmount, order.yusdAmount);
+    uint256 yusdAmount = _calculateMinYUSDAmount(order.collateralAsset, order.collateralAmount, order.yusdAmount);//最小YUSD金额
     if (yusdAmount < order.slippageAdjustedAmount) {
       revert PriceSlippage();
     }
@@ -259,11 +259,11 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     // Take a fee, if it's applicable
     (uint256 mintAmount, uint256 fee) = _calculateInsuranceFundFeeFromAmount(yusdAmount, mintFeeBP);
     if (fee > 0) {
-      yusd.mint(insuranceFundAddress, fee);
+      yusd.mint(insuranceFundAddress, fee);//手续费转给insurance fund
     }
 
-    IERC20(order.collateralAsset).safeTransferFrom(order.userWallet, address(this), order.collateralAmount);
-    yusd.mint(order.userWallet, mintAmount);
+    IERC20(order.collateralAsset).safeTransferFrom(order.userWallet, address(this), order.collateralAmount);//转collateralAmount给这个合约
+    yusd.mint(order.userWallet, mintAmount);//mint用户的钱包 mintAmount
     _custodyTransferrableAssetFunds[order.collateralAsset] += order.collateralAmount;
 
     emit Mint(_msgSender(), order.collateralAsset, order.collateralAmount, mintAmount, fee);
@@ -271,6 +271,7 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
 
   /**
    * @dev Creates new RedeemRequest and locks user's YUSD tokens
+   * 用户请求赎回 YUSD 换回抵押资产
    * @param order Struct containing order details
    * @param signature Signature of trusted signer
    */
@@ -282,25 +283,25 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
       revert InvalidOrder();
     }
 
-    _checkMintRedeemLimit(redeemLimit, order.yusdAmount);
-    order.verify(getDomainSeparator(), aegisConfig.trustedSigner(), signature);
+    _checkMintRedeemLimit(redeemLimit, order.yusdAmount);//常规检查，和mint一样
+    order.verify(getDomainSeparator(), aegisConfig.trustedSigner(), signature);//同mint
 
-    uint256 collateralAmount = _calculateRedeemMinCollateralAmount(order.collateralAsset, order.collateralAmount, order.yusdAmount);
+    uint256 collateralAmount = _calculateRedeemMinCollateralAmount(order.collateralAsset, order.collateralAmount, order.yusdAmount);//最小的collateral数量
     // Revert transaction when smallest amount is less than order minAmount
-    if (collateralAmount < order.slippageAdjustedAmount) {
+    if (collateralAmount < order.slippageAdjustedAmount) {//对比mint，左边的数不一样，一个是yusdAmount，这里是collateralAmount
       revert PriceSlippage();
     }
 
-    string memory requestId = abi.decode(order.additionalData, (string));
-    RedeemRequest memory request = _redeemRequests[keccak256(abi.encode(requestId))];
-    if (request.timestamp != 0) {
+    string memory requestId = abi.decode(order.additionalData, (string));//生成requestId，这个ID来可以自己弄
+    RedeemRequest memory request = _redeemRequests[keccak256(abi.encode(requestId))];//按Id找之前的Request信息
+    if (request.timestamp != 0) {//如果之前有过登记则revert
       revert InvalidRedeemRequest();
     }
 
     _redeemRequests[keccak256(abi.encode(requestId))] = RedeemRequest(RedeemRequestStatus.PENDING, order, block.timestamp);
 
     // Lock YUSD
-    yusd.safeTransferFrom(order.userWallet, address(this), order.yusdAmount);
+    yusd.safeTransferFrom(order.userWallet, address(this), order.yusdAmount);//yUSD先转账
     totalRedeemLockedYUSD += order.yusdAmount;
 
     emit CreateRedeemRequest(requestId, _msgSender(), order.collateralAsset, order.collateralAmount, order.yusdAmount);
@@ -333,24 +334,24 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
       collateralAmount < request.order.slippageAdjustedAmount ||
       request.order.expiry < block.timestamp
     ) {
-      _rejectRedeemRequest(requestId, request);
+      _rejectRedeemRequest(requestId, request);//更新打标为reject，并将request的钱转回
       return;
     }
 
-    uint256 availableAssetFunds = _untrackedAvailableAssetBalance(request.order.collateralAsset);
+    uint256 availableAssetFunds = _untrackedAvailableAssetBalance(request.order.collateralAsset);//剩余可用的fund
     if (availableAssetFunds < collateralAmount) {
       revert NotEnoughFunds();
     }
 
-    // Take a fee, if it's applicable
+    // Take a fee, if it's applicable,手续费环节
     (uint256 burnAmount, uint256 fee) = _calculateInsuranceFundFeeFromAmount(request.order.yusdAmount, redeemFeeBP);
     if (fee > 0) {
       yusd.safeTransfer(insuranceFundAddress, fee);
     }
-
+  ////更新数据
     request.status = RedeemRequestStatus.APPROVED;
     totalRedeemLockedYUSD -= request.order.yusdAmount;
-
+  ///还回collateral
     IERC20(request.order.collateralAsset).safeTransfer(request.order.userWallet, collateralAmount);
     yusd.burn(burnAmount);
 
@@ -374,7 +375,7 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
    * @dev Withdraws expired RedeemRequest locked YUSD funds to user
    * @param requestId Id of RedeemRequest to withdraw
    */
-  function withdrawRedeemRequest(string calldata requestId) public nonReentrant whenRedeemUnpaused {
+  function withdrawRedeemRequest(string calldata requestId) public nonReentrant whenRedeemUnpaused {//撤销那些失效的订单
     RedeemRequest storage request = _redeemRequests[keccak256(abi.encode(requestId))];
     if (request.timestamp == 0 || request.status != RedeemRequestStatus.PENDING || request.order.expiry > block.timestamp) {
       revert InvalidRedeemRequest();
@@ -394,7 +395,7 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
    * @param order Struct containing order details
    * @param signature Signature of trusted signer
    */
-  function depositIncome(
+  function depositIncome(//将输入的collateralAsset(要求小于_untrackedAvailableAssetBalance)，记账，并转为yUSD转入rewards中
     OrderLib.Order calldata order,
     bytes calldata signature
   ) external nonReentrant onlyRole(FUNDS_MANAGER_ROLE) onlySupportedAsset(order.collateralAsset) {
@@ -404,24 +405,26 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     order.verify(getDomainSeparator(), aegisConfig.trustedSigner(), signature);
     _deduplicateOrder(order.userWallet, order.nonce);
 
-    uint256 availableAssetFunds = _untrackedAvailableAssetBalance(order.collateralAsset);
-    if (availableAssetFunds < order.collateralAmount) {
+    uint256 availableAssetFunds = _untrackedAvailableAssetBalance(order.collateralAsset);//赚到的+未知转账的可以转账的
+    if (availableAssetFunds < order.collateralAmount) {//真实资产和账目的差值如果小于要转化的collateral数量，就revert
       revert NotEnoughFunds();
     }
 
     uint256 yusdAmount = _calculateMinYUSDAmount(order.collateralAsset, order.collateralAmount, order.yusdAmount);
 
-    _custodyTransferrableAssetFunds[order.collateralAsset] += order.collateralAmount;
+    _custodyTransferrableAssetFunds[order.collateralAsset] += order.collateralAmount;//把这部分多的collateral记录到账目中
 
     // Transfer percent of YUSD rewards to insurance fund
     (uint256 mintAmount, uint256 fee) = _calculateInsuranceFundFeeFromAmount(yusdAmount, incomeFeeBP);
     if (fee > 0) {
-      yusd.mint(insuranceFundAddress, fee);
+      yusd.mint(insuranceFundAddress, fee);///手续费发给insurance fund
     }
 
     // Mint YUSD rewards to AegisRewards contract
-    yusd.mint(address(aegisRewards), mintAmount);
+    yusd.mint(address(aegisRewards), mintAmount);///发最终金额给reward
     aegisRewards.depositRewards(order.additionalData, mintAmount);
+    //bytes calldata requestId, uint256 amount
+    ///这个数据可以随意编辑那我不是可以冒领？funderManager管控
 
     emit DepositIncome(
       abi.decode(order.additionalData, (string)),
@@ -445,7 +448,7 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     address asset,
     uint256 amount
   ) external nonReentrant onlyRole(COLLATERAL_MANAGER_ROLE) onlySupportedAsset(asset) onlyCustodianAddress(wallet) {
-    uint256 availableBalance = _custodyAvailableAssetBalance(asset);
+    uint256 availableBalance = _custodyAvailableAssetBalance(asset);//ok
     if (availableBalance < amount) {
       revert NotEnoughFunds();
     }
@@ -475,6 +478,10 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
 
     emit ForceCustodyTransfer(wallet, asset, availableBalance);
   }
+
+
+/////////setFunctions
+
 
   /// @dev Sets new AegisRewards address
   function setAegisRewardsAddress(IAegisRewards _aegisRewards) external onlyRole(SETTINGS_MANAGER_ROLE) {
@@ -583,10 +590,7 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     emit AssetRemoved(asset);
   }
 
-  /// @dev Checks if an asset is supported
-  function isSupportedAsset(address asset) public view returns (bool) {
-    return _supportedAssets.contains(asset);
-  }
+
 
   /// @dev Adds custodian to custodians address list
   function addCustodianAddress(address custodian) public onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -623,27 +627,18 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     emit UnfreezeFunds(asset, amount);
   }
 
-  /// @dev Return cached value if chainId matches cache, otherwise recomputes separator
-  /// @return The domain separator at current chain
-  function getDomainSeparator() public view returns (bytes32) {
-    if (block.chainid == _chainId) {
-      return _domainSeparator;
-    }
-    return _computeDomainSeparator();
-  }
 
-  /// @dev verify validity of nonce by checking its presence
-  function verifyNonce(address sender, uint256 nonce) public view returns (uint256, uint256, uint256) {
-    if (nonce == 0) revert InvalidNonce();
-    uint256 invalidatorSlot = uint64(nonce) >> 8;
-    uint256 invalidatorBit = 1 << uint8(nonce);
-    uint256 invalidator = _orderBitmaps[sender][invalidatorSlot];
-    if (invalidator & invalidatorBit != 0) revert InvalidNonce();
 
-    return (invalidatorSlot, invalidator, invalidatorBit);
-  }
 
-  /// @dev deduplication of user order
+
+
+///////internals
+
+
+  
+
+  /// @dev deduplication of user order //ok
+  ///用在mint和request中
   function _deduplicateOrder(address sender, uint256 nonce) private {
     (uint256 invalidatorSlot, uint256 invalidator, uint256 invalidatorBit) = verifyNonce(sender, nonce);
     _orderBitmaps[sender][invalidatorSlot] = invalidator | invalidatorBit;
@@ -703,12 +698,63 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     emit RejectRedeemRequest(requestId, _msgSender(), request.order.userWallet, request.order.yusdAmount);
   }
 
+  function _checkMintRedeemLimit(MintRedeemLimit storage limits, uint256 yusdAmount) internal {
+    if (limits.periodDuration == 0 || limits.maxPeriodAmount == 0) {
+      return;
+    }
+    uint256 currentPeriodEndTime = limits.currentPeriodStartTime + limits.periodDuration;
+    if (//还在mint周期内，但是已经超过额度了/ 或者现在已经不在周期内且铸币/但是本次铸币大于最大限额
+      (currentPeriodEndTime >= block.timestamp && limits.currentPeriodTotalAmount + yusdAmount > limits.maxPeriodAmount) ||
+      (currentPeriodEndTime < block.timestamp && yusdAmount > limits.maxPeriodAmount)
+    ) {
+      revert LimitReached();
+    }
+    // Start new mint period
+    if (currentPeriodEndTime <= block.timestamp) {
+      limits.currentPeriodStartTime = uint32(block.timestamp);
+      limits.currentPeriodTotalAmount = 0;
+    }
+
+    limits.currentPeriodTotalAmount += yusdAmount;
+  }
+
+
+
+
+
+///////view
+  /// @dev Checks if an asset is supported
+  function isSupportedAsset(address asset) public view returns (bool) {
+    return _supportedAssets.contains(asset);
+  }
+
+  /// @dev Return cached value if chainId matches cache, otherwise recomputes separator
+  /// @return The domain separator at current chain
+  function getDomainSeparator() public view returns (bytes32) {
+    if (block.chainid == _chainId) {
+      return _domainSeparator;
+    }
+    return _computeDomainSeparator();
+  }
+
+
+    /// @dev verify validity of nonce by checking its presence
+  function verifyNonce(address sender, uint256 nonce) public view returns (uint256, uint256, uint256) {
+    if (nonce == 0) revert InvalidNonce();
+    uint256 invalidatorSlot = uint64(nonce) >> 8;
+    uint256 invalidatorBit = 1 << uint8(nonce);
+    uint256 invalidator = _orderBitmaps[sender][invalidatorSlot];
+    if (invalidator & invalidatorBit != 0) revert InvalidNonce();
+
+    return (invalidatorSlot, invalidator, invalidatorBit);
+  }
+
   function _custodyAvailableAssetBalance(address _asset) internal view returns (uint256) {
-    uint256 custodyTransferrableFunds = _custodyTransferrableAssetFunds[_asset];
-    uint256 balance = IERC20(_asset).balanceOf(address(this));
+    uint256 custodyTransferrableFunds = _custodyTransferrableAssetFunds[_asset];///账面的（增加来自mint/depositIncome，减少来自transferTocustody/forceTransferToCustody）
+    uint256 balance = IERC20(_asset).balanceOf(address(this));//实际的
     if (balance < custodyTransferrableFunds || custodyTransferrableFunds < assetFrozenFunds[_asset]) {
       return 0;
-    }
+    }///实际小于账目，或者账目上小于冻结资金
 
     return custodyTransferrableFunds - assetFrozenFunds[_asset];
   }
@@ -719,8 +765,14 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
       return 0;
     }
 
-    return balance - _custodyTransferrableAssetFunds[_asset] - assetFrozenFunds[_asset];
+    return balance - _custodyTransferrableAssetFunds[_asset] - assetFrozenFunds[_asset];///bug 算错了,_custodyTransferrableAssetFunds包括了frozenFund
   }
+  ///asset: balance
+  ///Liability: custodyTransferrableFunds - assetFrozenFunds[_asset] owned to custodian
+  ///           assetFrozenFunds[_asset] owned to frozen
+  /// net asset = balance - custodyTransferrableFunds
+  ///原函数是一个小的多的数，它被用来作为revert条件：availableAssetFunds < order.collateralAmount，更加容易成立
+  /// 这导致部分reward没用被`depositIncome`及时deposit
 
   function _calculateInsuranceFundFeeFromAmount(uint256 amount, uint16 feeBP) internal view returns (uint256, uint256) {
     if (insuranceFundAddress == address(0) || feeBP == 0) {
@@ -734,7 +786,7 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
 
   function _calculateMinYUSDAmount(address collateralAsset, uint256 collateralAmount, uint256 yusdAmount) internal view returns (uint256) {
     (uint256 chainlinkPrice, uint8 feedDecimals) = _getAssetUSDPriceChainlink(collateralAsset);
-    if (chainlinkPrice == 0) {
+    if (chainlinkPrice == 0) {//只存在当没设置price feed情况下
       return yusdAmount;
     }
 
@@ -748,14 +800,14 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     return Math.min(yusdAmount, chainlinkYUSDAmount);
   }
 
-  function _calculateRedeemMinCollateralAmount(
+  function _calculateRedeemMinCollateralAmount(///算赎回能拿多少钱
     address collateralAsset,
-    uint256 collateralAmount,
-    uint256 yusdAmount
+    uint256 collateralAmount,///最低抵押额度
+    uint256 yusdAmount///yusdc数量
   ) internal view returns (uint256) {
     // Calculate collateral amount for chainlink asset price.
     (uint256 chainlinkPrice, uint8 feedDecimals) = _getAssetUSDPriceChainlink(collateralAsset);
-    if (chainlinkPrice > 0) {
+    if (chainlinkPrice > 0) {//collateral Amount  = yUSD * aDecimal/ p
       uint256 chainlinkCollateralAmount = Math.mulDiv(
         yusdAmount,
         10 ** feedDecimals,
@@ -782,26 +834,6 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
     return collateralAmount;
   }
 
-  function _checkMintRedeemLimit(MintRedeemLimit storage limits, uint256 yusdAmount) internal {
-    if (limits.periodDuration == 0 || limits.maxPeriodAmount == 0) {
-      return;
-    }
-    uint256 currentPeriodEndTime = limits.currentPeriodStartTime + limits.periodDuration;
-    if (
-      (currentPeriodEndTime >= block.timestamp && limits.currentPeriodTotalAmount + yusdAmount > limits.maxPeriodAmount) ||
-      (currentPeriodEndTime < block.timestamp && yusdAmount > limits.maxPeriodAmount)
-    ) {
-      revert LimitReached();
-    }
-    // Start new mint period
-    if (currentPeriodEndTime <= block.timestamp) {
-      limits.currentPeriodStartTime = uint32(block.timestamp);
-      limits.currentPeriodTotalAmount = 0;
-    }
-
-    limits.currentPeriodTotalAmount += yusdAmount;
-  }
-
   function _getAssetUSDPriceChainlink(address asset) internal view returns (uint256, uint8) {
     if (address(_feedRegistry) == address(0)) {
       return (0, 0);
@@ -824,7 +856,7 @@ contract AegisMinting is IAegisMintingEvents, IAegisMintingErrors, AccessControl
       return (0, 0);
     }
     uint8 yusdUSDPriceDecimals = aegisOracle.decimals();
-    (uint256 assetUSDPrice, ) = _getAssetUSDPriceChainlink(asset);
+    (uint256 assetUSDPrice, ) = _getAssetUSDPriceChainlink(asset);//从上面函数获得，chainlink本身priceFeed
 
     return ((assetUSDPrice * 10 ** yusdUSDPriceDecimals) / uint256(yusdUSDPrice), yusdUSDPriceDecimals);
   }
